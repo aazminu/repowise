@@ -94,6 +94,9 @@ def _name_uncounted_blocks(result: dict[str, Any], reported_counts: str) -> None
         result["counts_not_applied_to"] = unprojected
 
 
+_UNKNOWN_ONLY_HINTS = (_UNKNOWN_ONLY_HINT, _TARGETED_UNKNOWN_ONLY_HINT)
+
+
 def _project(
     result: dict[str, Any], req: HealthRequest, reported_scope: str, reported_counts: str
 ) -> dict[str, Any]:
@@ -138,7 +141,5 @@ def _project(
     if unknown:
         result["unknown_only_keys"] = unknown
         _stamp_collection(result, "unknown_only_keys", total=len(unknown))
-        result["unknown_only_keys_hint"] = (
-            _TARGETED_UNKNOWN_ONLY_HINT if req.raw_targets else _UNKNOWN_ONLY_HINT
-        )
+        result["unknown_only_keys_hint"] = _UNKNOWN_ONLY_HINTS[bool(req.raw_targets)]
     return result
