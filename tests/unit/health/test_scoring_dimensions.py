@@ -75,7 +75,7 @@ _LEGACY_WEIGHT_MULTIPLIER = {
     "developer_congestion": 0.5,
     "low_cohesion": 0.5,
     "brain_method": 0.5,
-    "bumpy_road": 0.5,
+    "repeated_nesting": 0.5,
     "primitive_obsession": 0.5,
     "dry_violation": 0.5,
     "knowledge_loss": 0.4,
@@ -90,7 +90,7 @@ _LEGACY_CATEGORY = {
     "low_cohesion": "structural_complexity",
     "god_class": "structural_complexity",
     "nested_complexity": "structural_complexity",
-    "bumpy_road": "structural_complexity",
+    "repeated_nesting": "structural_complexity",
     "complex_conditional": "structural_complexity",
     "complex_method": "size_and_complexity",
     "large_method": "size_and_complexity",
@@ -164,9 +164,9 @@ def _r(name: str, severity: Severity, *, deduction: float | None = None) -> Biom
 _FIXTURES: list[list[BiomarkerResult]] = [
     [],
     [_r("complex_method", Severity.CRITICAL) for _ in range(20)],
-    [_r("brain_method", Severity.CRITICAL), _r("nested_complexity", Severity.CRITICAL)],
+    [_r("low_cohesion", Severity.CRITICAL), _r("nested_complexity", Severity.CRITICAL)],
     [
-        _r("brain_method", Severity.CRITICAL),
+        _r("low_cohesion", Severity.CRITICAL),
         _r("nested_complexity", Severity.HIGH),
         _r("complex_method", Severity.MEDIUM),
         _r("untested_hotspot", Severity.HIGH),
@@ -216,7 +216,7 @@ def test_code_shape_markers_reach_maintainability():
     else, which left the pillar a reader watches while refactoring blind to the
     most common thing a refactor removes.
     """
-    for marker in ("complex_method", "complex_conditional", "bumpy_road"):
+    for marker in ("complex_method", "complex_conditional", "repeated_nesting"):
         scores, _ = score_file([_r(marker, Severity.CRITICAL)])
         assert scores["maintainability"] < 10.0, marker
 
@@ -231,7 +231,7 @@ def test_defect_deductions_unchanged():
 
 
 def test_score_file_returns_all_dimensions():
-    scores, _ = score_file([_r("brain_method", Severity.HIGH)])
+    scores, _ = score_file([_r("low_cohesion", Severity.HIGH)])
     assert set(scores) == set(DIMENSIONS)
 
 
@@ -374,7 +374,7 @@ def test_maintainability_accumulates_across_findings():
     """Two structural maintainability smells accumulate (under the 4.0 cap)."""
     findings = [
         _r("low_cohesion", Severity.HIGH),  # 1.2 * 1.0
-        _r("brain_method", Severity.HIGH),  # 1.2 * 1.0
+        _r("low_cohesion", Severity.HIGH),  # 1.2 * 1.0
     ]
     scores, _ = score_file(findings)
     # structural_complexity maintainability: 1.2 + 1.2 = 2.4 (< 4.0 cap) -> 7.6
@@ -383,7 +383,7 @@ def test_maintainability_accumulates_across_findings():
 
 def test_maintainability_structural_cap_bounds_stream():
     """Many critical structural smells saturate the 4.0 maintainability cap."""
-    findings = [_r("brain_method", Severity.CRITICAL) for _ in range(10)]
+    findings = [_r("low_cohesion", Severity.CRITICAL) for _ in range(10)]
     scores, _ = score_file(findings)
     # 10 * 2.0 = 20 raw -> clamped to the 4.0 structural cap -> 6.0
     assert scores["maintainability"] == 6.0
@@ -392,9 +392,9 @@ def test_maintainability_structural_cap_bounds_stream():
 def test_maintainability_categories_capped_independently():
     """Each maintainability category is bounded on its own budget."""
     findings = [
-        _r("brain_method", Severity.CRITICAL),  # structural, capped at 4.0
-        _r("brain_method", Severity.CRITICAL),
-        _r("brain_method", Severity.CRITICAL),
+        _r("low_cohesion", Severity.CRITICAL),  # structural, capped at 4.0
+        _r("low_cohesion", Severity.CRITICAL),
+        _r("low_cohesion", Severity.CRITICAL),
         _r("dry_violation", Severity.CRITICAL),  # duplication, capped at 2.0
         _r("dry_violation", Severity.CRITICAL),
         _r("error_handling", Severity.CRITICAL),  # error_handling, capped at 2.0

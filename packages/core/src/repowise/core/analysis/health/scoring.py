@@ -169,8 +169,7 @@ _BIOMARKER_WEIGHT_MULTIPLIER: dict[str, float] = {
     # --- floored: fired widely but weak / non-predictive at T0 ---
     "developer_congestion": 0.5,  # was 1.5 - the HEAD-leakage hero; weak under T0
     "low_cohesion": 0.5,
-    "brain_method": 0.5,
-    "bumpy_road": 0.5,
+    "repeated_nesting": 0.5,
     "primitive_obsession": 0.5,
     "dry_violation": 0.5,
     "knowledge_loss": 0.4,  # confirmed weak-negative since Phase 1
@@ -196,7 +195,7 @@ _BIOMARKER_CATEGORY: dict[str, str] = {
     "low_cohesion": "structural_complexity",
     "god_class": "structural_complexity",
     "nested_complexity": "structural_complexity",
-    "bumpy_road": "structural_complexity",
+    "repeated_nesting": "structural_complexity",
     "complex_conditional": "structural_complexity",
     "complex_method": "size_and_complexity",
     "large_method": "size_and_complexity",
@@ -273,7 +272,6 @@ ZERO_IMPACT_DIMENSIONS: frozenset[str] = frozenset({"performance", ADVISORY_DIME
 _BIOMARKER_DIMENSIONS: dict[str, set[str]] = {
     # Floored-in-defect maintainability smells -> full weight in maintainability.
     "low_cohesion": {"defect", "maintainability"},
-    "brain_method": {"defect", "maintainability"},
     "primitive_obsession": {"defect", "maintainability"},
     "dry_violation": {"defect", "maintainability"},
     "error_handling": {"defect", "maintainability"},
@@ -288,7 +286,7 @@ _BIOMARKER_DIMENSIONS: dict[str, set[str]] = {
     # maintainability problem whether or not it is also a defect predictor.
     "complex_method": {"defect", "maintainability"},
     "complex_conditional": {"defect", "maintainability"},
-    "bumpy_road": {"defect", "maintainability"},
+    "repeated_nesting": {"defect", "maintainability"},
     # Performance-risk detectors contribute to ``performance`` ONLY. They are
     # NOT defect predictors and must never move the surfaced (defect) score -
     # that exclusion is what keeps the defect golden guarantee intact.
@@ -332,6 +330,9 @@ _BIOMARKER_DIMENSIONS: dict[str, set[str]] = {
     # Near-chance defect AUC alone, and dropping it was non-inferior on a fresh
     # 12-repo pre-registered test (docs/architecture/code-health.md).
     "hidden_coupling": {ADVISORY_DIMENSION},
+    # Fires only beside complex_method and large_method on the same function, so
+    # scoring it charged that function twice; dropping it moved no defect AUC.
+    "brain_method": {ADVISORY_DIMENSION},
 }
 
 # Maintainability per-biomarker weight multipliers. Expert-set by definition -
@@ -341,7 +342,6 @@ _BIOMARKER_DIMENSIONS: dict[str, set[str]] = {
 # below, never against the defect corpus. Unknown biomarkers fall back to 1.0.
 _MAINTAINABILITY_WEIGHT_MULTIPLIER: dict[str, float] = {
     "low_cohesion": 1.0,
-    "brain_method": 1.0,
     "primitive_obsession": 1.0,
     "dry_violation": 1.0,
     "error_handling": 1.0,
@@ -350,7 +350,7 @@ _MAINTAINABILITY_WEIGHT_MULTIPLIER: dict[str, float] = {
     "nested_complexity": 1.0,
     "complex_method": 1.0,
     "complex_conditional": 1.0,
-    "bumpy_road": 1.0,
+    "repeated_nesting": 1.0,
     # SQL smells ship advisory (0.7) pending a precision spot-check on a
     # migrations-heavy corpus, mirroring how new perf markers land.
     "sql_high_complexity": 0.7,
@@ -361,13 +361,12 @@ _MAINTAINABILITY_WEIGHT_MULTIPLIER: dict[str, float] = {
 # Maintainability category per biomarker - an OWN table, independent of the
 # defect category map, so the two dimensions can be retuned separately.
 _MAINTAINABILITY_CATEGORY: dict[str, str] = {
-    "brain_method": "structural_complexity",
     "low_cohesion": "structural_complexity",
     "god_class": "structural_complexity",
     "nested_complexity": "structural_complexity",
     "large_method": "structural_complexity",
     "complex_conditional": "structural_complexity",
-    "bumpy_road": "structural_complexity",
+    "repeated_nesting": "structural_complexity",
     "complex_method": "size_and_complexity",
     "primitive_obsession": "size_and_complexity",
     "dry_violation": "duplication",
@@ -398,7 +397,6 @@ _MAINTAINABILITY_CATEGORY_CAPS: dict[str, float] = {
 _MAINTAINABILITY_HOME: frozenset[str] = frozenset(
     {
         "low_cohesion",
-        "brain_method",
         "primitive_obsession",
         "dry_violation",
         "error_handling",
@@ -556,7 +554,7 @@ _PERFORMANCE_HOME: frozenset[str] = frozenset(
 # The display half of the pairing above; ``test_advisory_dimension.py`` locks
 # the two together for every registered biomarker.
 _ADVISORY_HOME: frozenset[str] = frozenset(
-    {"assertion_free_test", "mock_saturated_test", "hidden_coupling"}
+    {"assertion_free_test", "mock_saturated_test", "hidden_coupling", "brain_method"}
 )
 
 

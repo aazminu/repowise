@@ -23,7 +23,7 @@ from ..health.scoring import ADVISORY_DIMENSION, is_advisory
 from .analyzer import RevisionAnalysis, RevisionHealthAnalyzer, language_for, language_of
 from .attribution import FindingAttributor, changed_symbols_for
 from .identity import change_finding_id, finding_key, severity_rank
-from .matcher import FindingMatcher, MatchedFinding
+from .matcher import FindingMatcher, MatchedFinding, MatchResult
 from .models import (
     NO_CODE_GAP,
     NOT_ANALYZABLE_DATA,
@@ -34,6 +34,7 @@ from .models import (
     RevisionId,
     ScopeCounts,
 )
+from .moves import bodies_for, build_move_map
 from .perf_delta import PerfOpportunityView, index_by_finding, opportunities_for
 from .sources import (
     FileChange,
@@ -67,6 +68,8 @@ _WAIT_TIMEOUT_SECONDS = 30
 _CLAIM_ATTEMPTS = 2
 
 _DIMENSION_ORDER = {"defect": 0, "maintainability": 1, "performance": 2, ADVISORY_DIMENSION: 3}
+
+_BASIS = "both_sides_analyzed"
 
 #: Bases that place a finding away from the lines the change wrote.
 _INCIDENTAL_BASES = {"file_change", "context_change", "unknown"}
@@ -205,35 +208,21 @@ class ChangeHealthDeltaService:
 
     # -- comparison ---------------------------------------------------------
 
-    def _compare_uncached(
-        self, request: DeltaRequest, pair: RevisionPair
-    ) -> ChangeHealthDelta:
+    def _compare_uncached(self, request: DeltaRequest, pair: RevisionPair) -> ChangeHealthDelta:
         started = time.perf_counter()
         changes = _filter(pair.changes, request)
-        scope = ScopeCounts(changed=len(changes))
-        eligible = [c for c in changes if c.head_path and language_for(c.head_path)]
-        scope.eligible = len(eligible)
-        skipped = {
-            c.head_path or c.base_path or "": _skip_reason(c) for c in changes if c not in eligible
-        }
-        skipped.pop("", None)
+        eligible, departed, skipped = _partition(changes)
+        scope = ScopeCounts(changed=len(changes), eligible=len(eligible) + len(departed))
+        base_id, head_id = _revision_ids(pair)
 
-        base_id = RevisionId(pair.base_ref, pair.base_sha, "commit")
-        head_id = RevisionId(
-            pair.head_ref,
-            pair.head_sha or "",
-            "working_tree" if pair.working_tree else "commit",
-        )
-        basis = "both_sides_analyzed"
-
-        if not eligible:
+        if not scope.eligible:
             delta = ChangeHealthDelta(
                 # Nothing was compared either way, so neither case is a clean bill.
                 status="unavailable",
                 explanation=_nothing_compared(changes, skipped),
                 base=base_id,
                 head=head_id,
-                comparison_basis=basis,
+                comparison_basis=_BASIS,
                 fingerprint=self.fingerprint,
                 scope=scope,
                 skipped=skipped,
@@ -241,10 +230,10 @@ class ChangeHealthDeltaService:
             delta.timing_ms = (time.perf_counter() - started) * 1000
             return delta
 
-        if len(eligible) > MAX_CHANGED_FILES:
+        if scope.eligible > MAX_CHANGED_FILES:
             return _unavailable(
                 "too_large",
-                f"{len(eligible)} changed files exceeds the {MAX_CHANGED_FILES}-file "
+                f"{scope.eligible} changed files exceeds the {MAX_CHANGED_FILES}-file "
                 "ceiling for a two-sided analysis.",
                 base=base_id,
                 head=head_id,
@@ -252,60 +241,82 @@ class ChangeHealthDeltaService:
                 fingerprint=self.fingerprint,
             )
 
+        sides = self._analyze(pair, eligible, departed)
+        skipped.update(sides.head_run.skipped)
+        skipped.update(_held_origins(sides.head_sources, self.repo_path))
+        skipped.update(_base_failures(eligible + departed, sides.base_run, skipped))
+        subject = {
+            p for p in sides.head_run.analyzed if p in set(sides.head_paths) and p not in skipped
+        }
+        moves = build_move_map(
+            bodies_for(sides.base_sources, sides.base_run.symbols),
+            bodies_for(sides.head_sources, sides.head_run.symbols),
+            rename_map=sides.rename,
+        )
+        gone = {c.base_path for c in departed if c.base_path and c.base_path not in skipped}
+
+        scope.analyzed = len(subject) + len(gone)
+        scope.skipped = len(skipped)
+        scope.failed = sum(
+            1 for r in skipped.values() if r.removeprefix("base_") in {"parse_failed", "unreadable"}
+        )
+        match = _match(sides, subject, gone, FindingMatcher(sides.rename, _hunks(eligible), moves))
+        findings = self._surface(match, eligible, sides.head_run.findings_for(subject), pair)
+
+        status, explanation = _status_for(scope, skipped, findings, deleted=len(gone))
+        delta = ChangeHealthDelta(
+            status=status,
+            explanation=explanation,
+            base=base_id,
+            head=head_id,
+            comparison_basis=_BASIS,
+            fingerprint=self.fingerprint,
+            scope=scope,
+            findings=findings,
+            resolved_total=len(match.resolved),
+            unchanged_total=match.unchanged_total,
+            improved_total=match.improved_total,
+            moved_total=match.moved_total,
+            skipped=skipped,
+            moved_to={old: new for old, new in moves.destinations().items() if old in gone},
+            limits=_limits(sides.head_run.findings_for(subject)),
+        )
+        delta.timing_ms = (time.perf_counter() - started) * 1000
+        return delta
+
+    def _analyze(
+        self, pair: RevisionPair, eligible: list[FileChange], departed: list[FileChange]
+    ) -> _Sides:
+        """Read and analyse both sides; *departed* (deleted) files go on the base side only.
+
+        Code split out of a deleted file then pairs with its new home instead of
+        reading as introduced.
+        """
         head_paths = [c.head_path for c in eligible if c.head_path]
-        base_paths = [c.base_path for c in eligible if c.base_path]
+        base_paths = [c.base_path for c in eligible + departed if c.base_path]
         head_sources = (
             self.source.read_working_tree(head_paths)
             if pair.working_tree
             else self.source.read(pair.head_sha, head_paths)
         )
         base_sources = self.source.read(pair.base_sha, base_paths)
-
         rename = pair.rename_map()
         head_run = self.analyzer.analyze(head_sources, subject_paths=set(head_paths))
         base_run = self.analyzer.analyze(
             base_sources, subject_paths=set(base_paths), dependents=_on_base(head_run, rename)
         )
+        return _Sides(head_paths, head_sources, base_sources, head_run, base_run, rename)
 
-        skipped.update(head_run.skipped)
-        skipped.update(_held_origins(head_sources, self.repo_path))
-        # A file whose BASE side failed has no baseline, so every finding at its
-        # head would read as introduced. Drop it from the subject and say so:
-        # silently keeping it is how a partial run fabricates new findings.
-        for change in eligible:
-            head_path, base_path = change.head_path, change.base_path
-            if head_path is None or base_path is None or head_path in skipped:
-                continue
-            reason = base_run.skipped.get(base_path)
-            if reason is not None:
-                skipped[head_path] = f"base_{reason}"
-        subject = {p for p in head_run.analyzed if p in set(head_paths) and p not in skipped}
-
-        scope.analyzed = len(subject)
-        scope.skipped = len(skipped)
-        scope.failed = sum(
-            1 for r in skipped.values() if r.removeprefix("base_") in {"parse_failed", "unreadable"}
-        )
-
-        matcher = FindingMatcher(rename, _hunks(eligible))
-        # Both sides are restricted to the same comparable set, so an excluded
-        # file cannot contribute a one-sided "introduced" or "resolved".
-        # Advisory markers deduct nothing, so adding one is not a regression
-        # and removing one is not a fix. Dropped from BOTH sides before
-        # matching, so every counter derived from the match agrees. Types the
-        # finding-type registry withholds go the same way, for the same reason,
-        # as do findings on a language the registry gates for health findings.
-        withheld = excluded_types()
-        base_findings = [
-            f
-            for f in base_run.findings
-            if rename.get(f.file_path, f.file_path) in subject and _comparable(f, withheld)
-        ]
-        head_findings = [f for f in head_run.findings_for(subject) if _comparable(f, withheld)]
-        match = matcher.match(base_findings, head_findings)
-
+    def _surface(
+        self,
+        match: MatchResult,
+        eligible: list[FileChange],
+        head_findings: list[HealthFindingData],
+        pair: RevisionPair,
+    ) -> list[ChangeFinding]:
+        """The introduced and worsened findings, attributed and in priority order."""
         by_file: dict[str, list[HealthFindingData]] = {}
-        for finding in head_run.findings_for(subject):
+        for finding in head_findings:
             by_file.setdefault(finding.file_path, []).append(finding)
         change_map = {c.head_path: c for c in eligible if c.head_path}
         attributor = FindingAttributor(change_map)
@@ -323,24 +334,7 @@ class ChangeHealthDeltaService:
             for m in surfaced
         ]
         findings.sort(key=_priority)
-
-        status, explanation = _status_for(scope, skipped, findings)
-        delta = ChangeHealthDelta(
-            status=status,
-            explanation=explanation,
-            base=base_id,
-            head=head_id,
-            comparison_basis=basis,
-            fingerprint=self.fingerprint,
-            scope=scope,
-            findings=findings,
-            resolved_total=len(match.resolved),
-            unchanged_total=match.unchanged_total,
-            skipped=skipped,
-            limits=_limits(head_run.findings_for(subject)),
-        )
-        delta.timing_ms = (time.perf_counter() - started) * 1000
-        return delta
+        return findings
 
     def _to_change_finding(
         self,
@@ -352,8 +346,9 @@ class ChangeHealthDeltaService:
     ) -> ChangeFinding:
         head = matched.head
         edge = perf.intervention_symbol if perf and perf.is_cross_function else None
+        moved_from = matched.moved_from
         attribution = attributor.attribute(
-            head, changed_symbols=changed_symbols, changed_call_edge=edge
+            head, changed_symbols=changed_symbols, changed_call_edge=edge, moved_from=moved_from
         )
         key = finding_key(head)
         return ChangeFinding(
@@ -377,10 +372,90 @@ class ChangeHealthDeltaService:
             opportunity_id=perf.opportunity_id if perf else None,
             opportunity_rank=perf.rank_score if perf else None,
             evidence=_evidence(head, perf),
+            moved_from={"path": moved_from[0], "symbol": moved_from[1]} if moved_from else None,
         )
 
 
 # -- helpers ----------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class _Sides:
+    """Both sides' bytes and analyses, as one comparison reads them."""
+
+    head_paths: list[str]
+    head_sources: dict[str, bytes]
+    base_sources: dict[str, bytes]
+    head_run: RevisionAnalysis
+    base_run: RevisionAnalysis
+    rename: dict[str, str]
+
+
+def _partition(
+    changes: list[FileChange],
+) -> tuple[list[FileChange], list[FileChange], dict[str, str]]:
+    """``(eligible, departed, skipped)``: analysable on head, deleted but analysable, the rest."""
+    eligible: list[FileChange] = []
+    departed: list[FileChange] = []
+    skipped: dict[str, str] = {}
+    for change in changes:
+        if change.head_path and language_for(change.head_path):
+            eligible.append(change)
+        elif change.head_path is None and language_for(change.base_path or ""):
+            departed.append(change)
+        elif path := change.head_path or change.base_path:
+            skipped[path] = _skip_reason(change)
+    return eligible, departed, skipped
+
+
+def _revision_ids(pair: RevisionPair) -> tuple[RevisionId, RevisionId]:
+    base = RevisionId(pair.base_ref, pair.base_sha, "commit")
+    head = RevisionId(
+        pair.head_ref, pair.head_sha or "", "working_tree" if pair.working_tree else "commit"
+    )
+    return base, head
+
+
+def _base_failures(
+    changes: list[FileChange], base_run: RevisionAnalysis, skipped: dict[str, str]
+) -> dict[str, str]:
+    """``{path: "base_<reason>"}`` for the files whose base side failed.
+
+    Without a baseline every head finding in the file would read as introduced,
+    so the file leaves the subject and the run says so.
+    """
+    out: dict[str, str] = {}
+    for change in changes:
+        path = change.head_path or change.base_path
+        reason = base_run.skipped.get(change.base_path or "")
+        if path and path not in skipped and reason is not None:
+            out[path] = f"base_{reason}"
+    return out
+
+
+def _match(
+    sides: _Sides, subject: set[str], gone: set[str], matcher: FindingMatcher
+) -> MatchResult:
+    """Match the comparable findings of both sides over the same file set.
+
+    Advisory markers deduct nothing, so adding one is not a regression and
+    removing one is not a fix; registry-withheld types and gated languages go
+    the same way. Dropped from both sides before matching, so every counter
+    derived from the match agrees.
+    """
+    withheld = excluded_types()
+    base_findings = [
+        f
+        for f in sides.base_run.findings
+        if (sides.rename.get(f.file_path, f.file_path) in subject or f.file_path in gone)
+        and _comparable(f, withheld)
+    ]
+    head_findings = [f for f in sides.head_run.findings_for(subject) if _comparable(f, withheld)]
+    match = matcher.match(base_findings, head_findings)
+    # A deleted file's unpaired findings may have moved somewhere this run did
+    # not read (an excluded or unparsed file), so they never count as resolved.
+    match.resolved = [f for f in match.resolved if f.file_path not in gone]
+    return match
 
 
 def _filter(changes: list[FileChange], request: DeltaRequest) -> list[FileChange]:
@@ -445,7 +520,7 @@ def _skip_reason(change: FileChange) -> str:
 
 
 def _status_for(
-    scope: ScopeCounts, skipped: dict[str, str], findings: list[ChangeFinding]
+    scope: ScopeCounts, skipped: dict[str, str], findings: list[ChangeFinding], *, deleted: int = 0
 ) -> tuple[str, str]:
     if scope.analyzed == 0:
         return "unavailable", (
@@ -465,7 +540,8 @@ def _status_for(
             "available",
             "No supported new findings surfaced in the analyzed scope.",
         )
-    return "available", f"Compared {scope.analyzed} changed files on both sides."
+    both = f"Compared {scope.analyzed - deleted} changed files on both sides"
+    return "available", f"{both} and {deleted} deleted on the base side." if deleted else f"{both}."
 
 
 def _limits(head_findings: list[HealthFindingData]) -> list[str]:
