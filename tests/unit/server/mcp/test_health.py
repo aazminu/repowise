@@ -729,12 +729,38 @@ async def test_get_health_only_projects_the_response(setup_mcp, health_data):
 async def test_get_health_only_names_unknown_keys(setup_mcp, health_data):
     """A misspelled projection is named, not silently answered with nothing."""
     from repowise.server.mcp_server import get_health
+    from repowise.server.mcp_server.tool_health.projection import _UNKNOWN_ONLY_HINT
 
     result = await get_health(only=["fix_first", "kpiz"])
     assert result["unknown_only_keys"] == ["kpiz"]
     assert result["unknown_only_keys_total"] == 1
     assert result["unknown_only_keys_emitted"] == 1
+    assert result["unknown_only_keys_hint"] == _UNKNOWN_ONLY_HINT
     assert "fix_first" in result
+
+
+@pytest.mark.asyncio
+async def test_get_health_targeted_only_hint_names_targeted_keys(setup_mcp, health_data):
+    """Targeted mode reports unknown only keys with targeted response keys in the hint."""
+    from repowise.server.mcp_server import get_health
+    from repowise.server.mcp_server.tool_health.projection import _TARGETED_UNKNOWN_ONLY_HINT
+
+    result = await get_health(targets=["src/auth/service.py"], only=["files"])
+    assert result["unknown_only_keys"] == ["files"]
+    hint = result["unknown_only_keys_hint"]
+    assert hint == _TARGETED_UNKNOWN_ONLY_HINT
+    assert "metrics" in hint
+    assert "findings" in hint
+    assert "trends" in hint
+    assert "fix_first" not in hint
+
+    dash_key = await get_health(targets=["src/auth/service.py"], only=["fix_first"])
+    assert dash_key["unknown_only_keys"] == ["fix_first"]
+    assert dash_key["unknown_only_keys_hint"] == _TARGETED_UNKNOWN_ONLY_HINT
+
+    metrics_only = await get_health(targets=["src/auth/service.py"], only=["metrics"])
+    assert len(metrics_only["metrics"]) == 1
+    assert "unknown_only_keys" not in metrics_only
 
 
 @pytest.mark.asyncio

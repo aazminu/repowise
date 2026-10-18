@@ -39,6 +39,12 @@ _UNKNOWN_ONLY_HINT = (
     "performance is an `include` value. See docs/agent/MCP_TOOLS.md."
 )
 
+_TARGETED_UNKNOWN_ONLY_HINT = (
+    "`only` names response keys, such as metrics, findings, trends or "
+    "modules; a dimension such as performance is an `include` value. "
+    "See docs/agent/MCP_TOOLS.md."
+)
+
 _PLAN_COMPANIONS = frozenset(
     {"refactoring_plans_status", "refactoring_plans_opportunities_total"}
 )
@@ -121,5 +127,7 @@ def _project(
     if unknown:
         result["unknown_only_keys"] = unknown
         _stamp_collection(result, "unknown_only_keys", total=len(unknown))
-        result["unknown_only_keys_hint"] = _UNKNOWN_ONLY_HINT
+        result["unknown_only_keys_hint"] = (
+            _TARGETED_UNKNOWN_ONLY_HINT if req.raw_targets else _UNKNOWN_ONLY_HINT
+        )
     return result
