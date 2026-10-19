@@ -38,3 +38,58 @@ async def test_sql_recompute_ranks_code_rows_only(async_session) -> None:
             assert r.churn_percentile == 0.0
             assert r.is_hotspot is False
             assert r.prior_defect_pct == 0.0
+
+
+async def test_compute_percentiles_matches_sql_recompute_with_ties(async_session) -> None:
+    from repowise.core.ingestion.git_indexer.enrich import compute_percentiles
+
+    repo = await insert_repo(async_session)
+    code = [
+        {
+            "file_path": "f1.py",
+            "temporal_hotspot_score": 1.0,
+            "commit_count_90d": 2,
+            "is_hotspot": False,
+        },
+        {
+            "file_path": "f2.py",
+            "temporal_hotspot_score": 10.0,
+            "commit_count_90d": 5,
+            "is_hotspot": False,
+        },
+        {
+            "file_path": "f3.py",
+            "temporal_hotspot_score": 10.0,
+            "commit_count_90d": 5,
+            "is_hotspot": False,
+        },
+        {
+            "file_path": "f4.py",
+            "temporal_hotspot_score": 25.0,
+            "commit_count_90d": 10,
+            "is_hotspot": False,
+        },
+        {
+            "file_path": "f5.py",
+            "temporal_hotspot_score": 50.0,
+            "commit_count_90d": 12,
+            "is_hotspot": False,
+        },
+    ]
+    compute_percentiles(code)
+    in_memory = {m["file_path"]: (m["churn_percentile"], m["is_hotspot"]) for m in code}
+
+    await upsert_git_metadata_bulk(async_session, repo.id, code)
+    await recompute_git_percentiles(async_session, repo.id)
+
+    rows = (
+        (
+            await async_session.execute(
+                select(GitMetadata).where(GitMetadata.repository_id == repo.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    from_sql = {r.file_path: (r.churn_percentile, r.is_hotspot) for r in rows}
+    assert from_sql == in_memory

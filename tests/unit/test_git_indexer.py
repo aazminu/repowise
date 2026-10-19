@@ -318,6 +318,80 @@ class TestHotspotAbsoluteFloors:
         assets = next(m for m in metas if m["file_path"] == "assets.bin")
         assert assets["is_hotspot"] is True
 
+    def test_churn_percentile_matches_sql_percent_rank(self) -> None:
+        """churn_percentile uses (RANK() - 1) / (N - 1) so the top file reaches
+        1.0 and N=5 places the 4th file at 0.75, matching SQL PERCENT_RANK()."""
+        from repowise.core.ingestion.git_indexer.enrich import compute_percentiles
+
+        metas = [
+            {
+                "file_path": f"f{i}.py",
+                "temporal_hotspot_score": float(i * 10),
+                "commit_count_90d": 10,
+                "is_hotspot": False,
+            }
+            for i in range(1, 6)
+        ]
+        compute_percentiles(metas)
+
+        assert [m["churn_percentile"] for m in metas] == [0.0, 0.25, 0.5, 0.75, 1.0]
+        assert [m["is_hotspot"] for m in metas] == [False, False, False, True, True]
+
+    def test_churn_percentile_ties_share_rank(self) -> None:
+        """Tied (temporal_hotspot_score, commit_count_90d) pairs receive the
+        same percentile and hotspot verdict regardless of input order."""
+        from repowise.core.ingestion.git_indexer.enrich import compute_percentiles
+
+        metas = [
+            {
+                "file_path": "quiet.py",
+                "temporal_hotspot_score": 1.0,
+                "commit_count_90d": 2,
+                "is_hotspot": False,
+            },
+            {
+                "file_path": "tied_a.py",
+                "temporal_hotspot_score": 50.0,
+                "commit_count_90d": 12,
+                "is_hotspot": False,
+            },
+            {
+                "file_path": "tied_b.py",
+                "temporal_hotspot_score": 50.0,
+                "commit_count_90d": 12,
+                "is_hotspot": False,
+            },
+            {
+                "file_path": "tied_c.py",
+                "temporal_hotspot_score": 50.0,
+                "commit_count_90d": 12,
+                "is_hotspot": False,
+            },
+        ]
+        compute_percentiles(metas)
+
+        by_path = {m["file_path"]: m for m in metas}
+        assert by_path["quiet.py"]["churn_percentile"] == 0.0
+        for name in ("tied_a.py", "tied_b.py", "tied_c.py"):
+            assert by_path[name]["churn_percentile"] == pytest.approx(1 / 3)
+            assert by_path[name]["is_hotspot"] is False
+
+    def test_churn_percentile_single_file_is_zero(self) -> None:
+        """A single-file repository gets churn_percentile 0.0 (matching SQL PERCENT_RANK)."""
+        from repowise.core.ingestion.git_indexer.enrich import compute_percentiles
+
+        metas = [
+            {
+                "file_path": "only.py",
+                "temporal_hotspot_score": 25.0,
+                "commit_count_90d": 10,
+                "is_hotspot": False,
+            }
+        ]
+        compute_percentiles(metas)
+        assert metas[0]["churn_percentile"] == 0.0
+        assert metas[0]["is_hotspot"] is False
+
 
 class TestCountActiveContributors:
     """count_active_contributors derives the repo's 90-day team size from
