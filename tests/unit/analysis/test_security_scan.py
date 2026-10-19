@@ -1243,6 +1243,26 @@ class TestVendorShapeEdges:
         source = 'GITHUB_TOKEN = "ghp_abcdefghijklmnopqrstuvwxyzABCDEFGHIJ"\n'  # pragma: allowlist secret
         assert self._kinds(source) == ["github_token"]
 
+    def test_public_env_with_credential_value_reports_credential_kind_once(self) -> None:
+        stripe = "sk_" + "live_" + "4eC39HqLyjWDarjtT1zdp7dc"
+        ghp = "ghp_" + "Kq7mZ2xV9pL4rT8wN3bY6cH1jF5dS0gA2eUo"
+        assert self._kinds(f"NEXT_PUBLIC_STRIPE_SECRET={stripe}\n", "web/.env") == ["stripe_key"]
+        assert self._kinds(f"NEXT_PUBLIC_GITHUB_TOKEN={ghp}\n", "web/.env") == ["github_token"]
+        assert self._kinds(
+            'const NEXT_PUBLIC_API_SECRET = "Xk9mQ2vLp7zAbc123";\n', "web/env.ts"
+        ) == ["hardcoded_secret"]
+        assert (
+            self._kinds(
+                f"NEXT_PUBLIC_STRIPE_SECRET={stripe}  # pragma: allowlist secret\n",
+                "web/.env",
+            )
+            == []
+        )
+        assert self._kinds("VITE_API_TOKEN=abc123\n", "web/.env") == ["public_env_secret"]
+        assert self._kinds("const k = process.env.NEXT_PUBLIC_API_KEY;\n", "web/env.ts") == [
+            "public_env_secret"
+        ]
+
     def test_pem_key_with_escaped_newline_is_flagged(self) -> None:
         source = (
             'PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\\n'

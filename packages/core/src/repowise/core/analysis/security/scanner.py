@@ -16,6 +16,7 @@ from .credentials import (
     _assignment_name,
     _is_empty_public_env_assignment,
     _is_secret_value,
+    _public_env_value,
     _redaction,
     _snippet,
     _value_span,
@@ -133,8 +134,11 @@ def scan_source(file_path: str, source: str, symbols: Iterable[Any] = ()) -> lis
                 if match and kind == "unsafe_inner_html" and _is_html_type_annotation(line, match):
                     match = None
             if match:
-                value_span = _value_span(kind, match, line) if match.groups() else (0, 0)
-                value = line[slice(*value_span)] if match.groups() else ""
+                if kind == "public_env_secret":
+                    value_span = _public_env_value(line, match.end()) or (0, 0)
+                else:
+                    value_span = _value_span(kind, match, line) if match.groups() else (0, 0)
+                value = line[slice(*value_span)]
                 if kind in SECRET_KINDS:
                     name = _assignment_name(line[: value_span[0]])
                     if not _is_secret_value(kind, value, name):
@@ -152,6 +156,8 @@ def scan_source(file_path: str, source: str, symbols: Iterable[Any] = ()) -> lis
                 findings.append(finding)
                 if kind in SECRET_KINDS:
                     secret_hits.append((finding, value, _SECRET_SPECIFICITY.get(kind, 2)))
+                elif kind == "public_env_secret" and value:
+                    secret_hits.append((finding, value, -1))
         # One secret, one finding: the highest-ranked kind that saw it names it.
         # Either value can hold the other: a keyword's runs to the closing quote.
         for finding, value, rank in secret_hits:
