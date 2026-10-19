@@ -27,7 +27,7 @@ from .changed import _changed_in_scope, _push_change
 from .cross_repo import _cross_repo_block
 from .health import (
     _attach_health_references,
-    _compare_health,
+    _delta_with_index,
     _evidence_block,
     _repository,
     _scored_repo,
@@ -67,7 +67,8 @@ async def _score_change(
     except ValueError as exc:
         return None, {"error": str(exc)}
     except subprocess.CalledProcessError as exc:
-        detail = (exc.stderr or "").strip() or str(exc)
+        detail = (exc.stderr or "").partition("\nUse '--' to separate paths from revisions")[0]
+        detail = detail.strip() or str(exc)
         return None, {"error": f"Could not read change {revspec or 'HEAD'!r}: {detail}"}
     except subprocess.TimeoutExpired:
         return None, {"error": f"git timed out reading change {revspec or 'HEAD'!r}."}
@@ -234,9 +235,8 @@ async def get_change_risk(
     # The delta is the expensive half and needs nothing the enrichments need,
     # so it runs alongside them rather than after.
     delta_task = asyncio.create_task(
-        asyncio.to_thread(
-            _compare_health,
-            str(ctx.path),
+        _delta_with_index(
+            ctx,
             revspec,
             tuple(extensions or ()),
             tuple(result.riskignore_excludes + result.request_excludes),
