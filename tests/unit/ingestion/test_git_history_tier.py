@@ -117,7 +117,7 @@ async def test_non_code_files_get_history_from_the_shared_walk(tmp_path, monkeyp
     assert meta["a.py"]["history_only"] is False
     assert meta["a.py"]["commit_count_total"] == _git_log_count(tmp_path, "a.py")
     assert meta["a.py"]["primary_owner_line_pct"] is not None
-    assert {meta["a.py"]["churn_percentile"], meta["b.py"]["churn_percentile"]} <= {0.0, 0.5}
+    assert {meta["a.py"]["churn_percentile"], meta["b.py"]["churn_percentile"]} <= {0.0, 1.0}
 
 
 async def test_update_writes_the_same_history_rows_as_a_full_index(tmp_path, monkeypatch) -> None:

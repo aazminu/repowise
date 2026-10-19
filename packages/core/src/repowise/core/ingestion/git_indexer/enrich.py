@@ -280,11 +280,12 @@ def compute_percentiles(metadata_list: list[dict]) -> None:
             )
             for m in metadata_list
         ]
+        counts = Counter(keys)
         below: dict[tuple[float, int], float] = {}
         running = 0
-        for key in sorted(set(keys)):
+        for key in sorted(counts):
             below[key] = running / (total - 1)
-            running += sum(1 for k in keys if k == key)
+            running += counts[key]
 
         for meta, key in zip(metadata_list, keys, strict=True):
             churn_pct = min(below[key], 1.0)
