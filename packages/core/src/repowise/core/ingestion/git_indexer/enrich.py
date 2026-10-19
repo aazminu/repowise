@@ -253,6 +253,40 @@ def _rank_over_population(
         meta[target_key] = min(below[value], 1.0)
 
 
+def _churn_rank_key(meta: dict) -> tuple[float, int]:
+    """Primary sort key (temporal_hotspot_score) and tiebreak (commit_count_90d)."""
+    return (
+        float(meta.get("temporal_hotspot_score") or 0.0),
+        int(meta.get("commit_count_90d") or 0),
+    )
+
+
+def _rank_churn_and_hotspots(metadata_list: list[dict]) -> None:
+    """Populate ``churn_percentile`` (SQL ``PERCENT_RANK``) and ``is_hotspot``."""
+    total = len(metadata_list)
+    if total < 2:
+        for meta in metadata_list:
+            meta["churn_percentile"] = 0.0
+        return
+
+    keys = [_churn_rank_key(m) for m in metadata_list]
+    counts = Counter(keys)
+    below: dict[tuple[float, int], float] = {}
+    running = 0
+    for key in sorted(counts):
+        below[key] = running / (total - 1)
+        running += counts[key]
+
+    for meta, key in zip(metadata_list, keys, strict=True):
+        churn_pct = min(below[key], 1.0)
+        meta["churn_percentile"] = churn_pct
+        # Hotspot: top 25% churn (churn_percentile >= 0.75) AND the absolute
+        # activity floors — without the floors, a quiet repo's top quartile is
+        # just "every file touched in 90 days" (issue #361).
+        if churn_pct >= 0.75 and meets_hotspot_floors(meta):
+            meta["is_hotspot"] = True
+
+
 def compute_percentiles(metadata_list: list[dict]) -> None:
     """Compute churn_percentile, is_hotspot, and the history percentiles.
 
@@ -265,37 +299,7 @@ def compute_percentiles(metadata_list: list[dict]) -> None:
     if not metadata_list:
         return
 
-    total = len(metadata_list)
-    if total < 2:
-        for meta in metadata_list:
-            meta["churn_percentile"] = 0.0
-    else:
-        # Sort by temporal_hotspot_score (primary) then commit_count_90d (tiebreak),
-        # with tied pairs sharing a rank to mirror SQL PERCENT_RANK:
-        # (RANK() - 1) / (total - 1).
-        keys = [
-            (
-                float(m.get("temporal_hotspot_score") or 0.0),
-                int(m.get("commit_count_90d") or 0),
-            )
-            for m in metadata_list
-        ]
-        counts = Counter(keys)
-        below: dict[tuple[float, int], float] = {}
-        running = 0
-        for key in sorted(counts):
-            below[key] = running / (total - 1)
-            running += counts[key]
-
-        for meta, key in zip(metadata_list, keys, strict=True):
-            churn_pct = min(below[key], 1.0)
-            meta["churn_percentile"] = churn_pct
-            # Hotspot: top 25% churn (churn_percentile >= 0.75) AND the absolute
-            # activity floors — without the floors, a quiet repo's top quartile is
-            # just "every file touched in 90 days" (issue #361). Folded into the
-            # rank loop so the list is scanned once.
-            if churn_pct >= 0.75 and meets_hotspot_floors(meta):
-                meta["is_hotspot"] = True
+    _rank_churn_and_hotspots(metadata_list)
 
     # Files with zero entropy — every file on the ESSENTIAL tier, plus
     # FULL-tier files that only ever changed alone — stay at 0.0 so the
