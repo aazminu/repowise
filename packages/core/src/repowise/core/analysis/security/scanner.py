@@ -16,7 +16,6 @@ from .credentials import (
     _assignment_name,
     _is_empty_public_env_assignment,
     _is_secret_value,
-    _public_env_value,
     _redaction,
     _snippet,
     _value_span,
@@ -134,10 +133,7 @@ def scan_source(file_path: str, source: str, symbols: Iterable[Any] = ()) -> lis
                 if match and kind == "unsafe_inner_html" and _is_html_type_annotation(line, match):
                     match = None
             if match:
-                if kind == "public_env_secret":
-                    value_span = _public_env_value(line, match.end()) or (0, 0)
-                else:
-                    value_span = _value_span(kind, match, line) if match.groups() else (0, 0)
+                value_span = _value_span(kind, match, line)
                 value = line[slice(*value_span)]
                 if kind in SECRET_KINDS:
                     name = _assignment_name(line[: value_span[0]])
@@ -154,18 +150,12 @@ def scan_source(file_path: str, source: str, symbols: Iterable[Any] = ()) -> lis
                     "line": lineno,
                 }
                 findings.append(finding)
-                if kind in SECRET_KINDS:
+                if value:
                     secret_hits.append((finding, value_span, _SECRET_SPECIFICITY.get(kind, 2)))
-                elif kind == "public_env_secret" and value:
-                    secret_hits.append((finding, value_span, -1))
         # One secret, one finding: the highest-ranked kind that saw its span names it.
         # Either span can hold the other: a keyword's runs to the closing quote.
         for finding, (start, end), rank in secret_hits:
-            if any(
-                r > rank
-                and ((start <= o_start and o_end <= end) or (o_start <= start and end <= o_end))
-                for _, (o_start, o_end), r in secret_hits
-            ):
+            if any(r > rank and max(start, s) < min(end, e) for _, (s, e), r in secret_hits):
                 findings.remove(finding)
 
     # Calls that open on one line and set ``shell=True`` on a later one; reported
