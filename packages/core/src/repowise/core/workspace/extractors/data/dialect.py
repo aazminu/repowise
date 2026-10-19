@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING
 
 from ..base import line_at
 from ..dialect import build_contract
-from .names import normalize_table_name
+from .names import is_system_table, normalize_table_name
 
 if TYPE_CHECKING:
     from repowise.core.workspace.contracts import Contract
@@ -71,7 +71,7 @@ def build_table_consumer(
     downstream views can distinguish readers from writers.
     """
     table = normalize_table_name(table_raw)
-    if table is None:
+    if table is None or is_system_table(table):
         return None
     return build_contract(
         ctx,
