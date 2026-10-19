@@ -333,9 +333,10 @@ class ChangeHealthDeltaService:
     def _analyzer_for(self, paths: list[str]) -> RevisionHealthAnalyzer:
         if self._custom_analyzer or self.repo_path is None:
             return self.analyzer
-        return RevisionHealthAnalyzer(
-            repo_root=self.repo_path, config=_analyzer_config(self.repo_path, paths)
-        )
+        config = _analyzer_config(self.repo_path, paths)
+        if config is None:
+            return self.analyzer
+        return RevisionHealthAnalyzer(repo_root=self.repo_path, config=config)
 
     def _surface(
         self,
