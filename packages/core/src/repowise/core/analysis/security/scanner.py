@@ -92,7 +92,7 @@ def scan_source(file_path: str, source: str, symbols: Iterable[Any] = ()) -> lis
         if not _ANY_PATTERN.search(line):
             continue
         snippet: str | None = None
-        secret_hits: list[tuple[dict, str, int]] = []
+        secret_hits: list[tuple[dict, tuple[int, int], int]] = []
         for pattern, kind, severity in _PATTERNS:
             if kind in _CALL_KINDS:
                 continue
@@ -155,13 +155,17 @@ def scan_source(file_path: str, source: str, symbols: Iterable[Any] = ()) -> lis
                 }
                 findings.append(finding)
                 if kind in SECRET_KINDS:
-                    secret_hits.append((finding, value, _SECRET_SPECIFICITY.get(kind, 2)))
+                    secret_hits.append((finding, value_span, _SECRET_SPECIFICITY.get(kind, 2)))
                 elif kind == "public_env_secret" and value:
-                    secret_hits.append((finding, value, -1))
-        # One secret, one finding: the highest-ranked kind that saw it names it.
-        # Either value can hold the other: a keyword's runs to the closing quote.
-        for finding, value, rank in secret_hits:
-            if any(r > rank and (o in value or value in o) for _, o, r in secret_hits):
+                    secret_hits.append((finding, value_span, -1))
+        # One secret, one finding: the highest-ranked kind that saw its span names it.
+        # Either span can hold the other: a keyword's runs to the closing quote.
+        for finding, (start, end), rank in secret_hits:
+            if any(
+                r > rank
+                and ((start <= o_start and o_end <= end) or (o_start <= start and end <= o_end))
+                for _, (o_start, o_end), r in secret_hits
+            ):
                 findings.remove(finding)
 
     # Calls that open on one line and set ``shell=True`` on a later one; reported

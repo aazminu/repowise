@@ -979,9 +979,9 @@ class TestScanSource:
     @pytest.mark.parametrize(
         ("source", "raw"),
         [
-            ("NEXT_PUBLIC_STRIPE_SECRET_KEY=sk_live_0123456789abcdef\n", "sk_live_0123456789abcdef"),  # pragma: allowlist secret
+            ("NEXT_PUBLIC_STRIPE_SECRET_KEY=sec_live_0123456789abcdef\n", "sec_live_0123456789abcdef"),  # pragma: allowlist secret
             ('  "VITE_API_KEY": "abcdef0123456789",\n', "abcdef0123456789"),
-            ("export const NEXT_PUBLIC_AUTH_TOKEN = 'tok_9876543210';\n", "tok_9876543210"),
+            ("export const NEXT_PUBLIC_SECRET_KEY = 'tok_9876543210';\n", "tok_9876543210"),
         ],
     )
     def test_public_env_secret_value_is_redacted(self, source: str, raw: str) -> None:
@@ -1262,6 +1262,12 @@ class TestVendorShapeEdges:
         assert self._kinds("const k = process.env.NEXT_PUBLIC_API_KEY;\n", "web/env.ts") == [
             "public_env_secret"
         ]
+        assert self._kinds(
+            'NEXT_PUBLIC_SECRET_KEY="abc123"; API_KEY="xabc123456789"\n', "web/env.ts"
+        ) == ["hardcoded_secret", "public_env_secret"]
+        assert self._kinds(
+            'API_KEY="xabc123456789"; NEXT_PUBLIC_API_TOKEN="abc123"\n', "web/env.ts"
+        ) == ["hardcoded_secret", "public_env_secret"]
 
     def test_pem_key_with_escaped_newline_is_flagged(self) -> None:
         source = (
